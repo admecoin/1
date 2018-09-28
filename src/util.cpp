@@ -5,7 +5,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #if defined(HAVE_CONFIG_H)
-#include "config/dash-config.h"
+#include "config/cpay-config.h"
 #endif
 
 #include "util.h"
@@ -75,6 +75,7 @@
 #include <sys/prctl.h>
 #endif
 
+#include <boost/algorithm/string.hpp>
 #include <boost/algorithm/string/case_conv.hpp> // for to_lower()
 #include <boost/algorithm/string/join.hpp>
 #include <boost/algorithm/string/predicate.hpp> // for startswith() and endswith()
@@ -104,7 +105,7 @@ namespace boost {
 
 using namespace std;
 
-//Dash only features
+//cPay only features
 bool fMasterNode = false;
 bool fLiteMode = false;
 /**
@@ -116,8 +117,8 @@ bool fLiteMode = false;
 */
 int nWalletBackups = 10;
 
-const char * const BITCOIN_CONF_FILENAME = "dash.conf";
-const char * const BITCOIN_PID_FILENAME = "dashd.pid";
+const char * const BITCOIN_CONF_FILENAME = "cpay.conf";
+const char * const BITCOIN_PID_FILENAME = "cpayd.pid";
 
 map<string, string> mapArgs;
 map<string, vector<string> > mapMultiArgs;
@@ -271,8 +272,8 @@ bool LogAcceptCategory(const char* category)
             const vector<string>& categories = mapMultiArgs["-debug"];
             ptrCategory.reset(new set<string>(categories.begin(), categories.end()));
             // thread_specific_ptr automatically deletes the set when the thread ends.
-            // "dash" is a composite category enabling all Dash-related debug output
-            if(ptrCategory->count(string("dash"))) {
+            // "cpay" is a composite category enabling all cPay-related debug output
+            if(ptrCategory->count(string("cpay"))) {
                 ptrCategory->insert(string("privatesend"));
                 ptrCategory->insert(string("instantsend"));
                 ptrCategory->insert(string("masternode"));
@@ -496,7 +497,7 @@ static std::string FormatException(const std::exception* pex, const char* pszThr
     char pszModule[MAX_PATH] = "";
     GetModuleFileNameA(NULL, pszModule, sizeof(pszModule));
 #else
-    const char* pszModule = "dash";
+    const char* pszModule = "cpay";
 #endif
     if (pex)
         return strprintf(
@@ -516,13 +517,13 @@ void PrintExceptionContinue(const std::exception* pex, const char* pszThread)
 boost::filesystem::path GetDefaultDataDir()
 {
     namespace fs = boost::filesystem;
-    // Windows < Vista: C:\Documents and Settings\Username\Application Data\DashCore
-    // Windows >= Vista: C:\Users\Username\AppData\Roaming\DashCore
-    // Mac: ~/Library/Application Support/DashCore
-    // Unix: ~/.dashcore
+    // Windows < Vista: C:\Documents and Settings\Username\Application Data\cPayCore
+    // Windows >= Vista: C:\Users\Username\AppData\Roaming\cPayCore
+    // Mac: ~/Library/Application Support/cPayCore
+    // Unix: ~/.cpaycore
 #ifdef WIN32
     // Windows
-    return GetSpecialFolderPath(CSIDL_APPDATA) / "DashCore";
+    return GetSpecialFolderPath(CSIDL_APPDATA) / "cPayCore";
 #else
     fs::path pathRet;
     char* pszHome = getenv("HOME");
@@ -532,10 +533,10 @@ boost::filesystem::path GetDefaultDataDir()
         pathRet = fs::path(pszHome);
 #ifdef MAC_OSX
     // Mac
-    return pathRet / "Library/Application Support/DashCore";
+    return pathRet / "Library/Application Support/cPayCore";
 #else
     // Unix
-    return pathRet / ".dashcore";
+    return pathRet / ".cpaycore";
 #endif
 #endif
 }
@@ -629,7 +630,7 @@ void ReadConfigFile(map<string, string>& mapSettingsRet,
 {
     boost::filesystem::ifstream streamConfig(GetConfigFile());
     if (!streamConfig.good()){
-        // Create empty dash.conf if it does not excist
+        // Create empty cpay.conf if it does not excist
         FILE* configFile = fopen(GetConfigFile().string().c_str(), "a");
         if (configFile != NULL)
             fclose(configFile);
@@ -641,7 +642,7 @@ void ReadConfigFile(map<string, string>& mapSettingsRet,
 
     for (boost::program_options::detail::config_file_iterator it(streamConfig, setOptions), end; it != end; ++it)
     {
-        // Don't overwrite existing settings so command line settings override dash.conf
+        // Don't overwrite existing settings so command line settings override cpay.conf
         string strKey = string("-") + it->string_key;
         string strValue = it->value[0];
         InterpretNegativeSetting(strKey, strValue);
@@ -1001,5 +1002,75 @@ std::string SafeIntVersionToString(uint32_t nVersion)
     {
         return "invalid_version";
     }
+}
+
+bool WriteMiningToConfig(bool mining,int procLimit)
+{
+    bool res=true;
+    res&= WriteKey("gen", (mining ? "1" : "0"));
+    if (procLimit!=0)
+            res&= WriteKey("genproclimit",itostr(procLimit));
+
+    return res;
+}
+
+bool WriteKey(std::string sKey, std::string sValue)
+{
+    // Allows cPay to store the key value in the config file.
+    boost::filesystem::path pathConfigFile(GetArg("-conf", "cpay.conf"));
+    if (!pathConfigFile.is_complete()) pathConfigFile = GetDataDir(false) / pathConfigFile;
+    if (!boost::filesystem::exists(pathConfigFile))
+    {
+        // Config is empty, create it:
+        FILE *outFileNew = fopen(pathConfigFile.string().c_str(),"w");
+        fputs("", outFileNew);
+        fclose(outFileNew);
+        LogPrintf("** Created brand new cpay.conf file **\n");
+    }
+    boost::to_lower(sKey);
+    std::string sLine = "";
+    ifstream streamConfigFile;
+    streamConfigFile.open(pathConfigFile.string().c_str());
+    std::string sConfig = "";
+    bool fWritten = false;
+    if(streamConfigFile)
+    {
+       while(getline(streamConfigFile, sLine))
+       {
+           // std::vector<std::string> vEntry = Split(sLine,"=");
+            std::vector<std::string> vEntry;
+            boost::split(vEntry, sLine, boost::is_any_of("="));
+            if (vEntry.size() == 2)
+            {
+                std::string sSourceKey = vEntry[0];
+                std::string sSourceValue = vEntry[1];
+                boost::to_lower(sSourceKey);
+                if (sSourceKey==sKey)
+                {
+                    sSourceValue = sValue;
+                    sLine = sSourceKey + "=" + sSourceValue;
+                    fWritten=true;
+                }
+            }
+            //sLine = strReplace(sLine,"\r","");
+            // sLine = strReplace(sLine,"\n","");
+            boost::replace_all(sLine, "\r", "");
+            boost::replace_all(sLine, "\n", "");
+            sLine += "\r\n";
+            sConfig += sLine;
+       }
+    }
+    if (!fWritten)
+    {
+        sLine = sKey + "=" + sValue + "\r\n";
+        sConfig += sLine;
+    }
+
+    streamConfigFile.close();
+    FILE *outFile = fopen(pathConfigFile.string().c_str(),"w");
+    fputs(sConfig.c_str(), outFile);
+    fclose(outFile);
+    ReadConfigFile(mapArgs, mapMultiArgs);
+    return true;
 }
 

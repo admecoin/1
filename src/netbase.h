@@ -6,7 +6,7 @@
 #define BITCOIN_NETBASE_H
 
 #if defined(HAVE_CONFIG_H)
-#include "config/dash-config.h"
+#include "config/cpay-config.h"
 #endif
 
 #include "compat.h"
@@ -23,7 +23,7 @@ extern bool fNameLookup;
 //! -timeout default
 static const int DEFAULT_CONNECT_TIMEOUT = 5000;
 //! -dns default
-static const int DEFAULT_NAME_LOOKUP = true;
+static const int DEFAULT_NAME_LOOKUP = false;
 
 class proxyType
 {

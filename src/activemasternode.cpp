@@ -145,7 +145,7 @@ void CActiveMasternode::ManageStateInitial(CConnman& connman)
         // If we have some peers, let's try to find our local address from one of them
         connman.ForEachNodeContinueIf(CConnman::AllNodes, [&fFoundLocal, &empty, this](CNode* pnode) {
             empty = false;
-            if (pnode->addr.IsIPv4())
+            if (pnode->addr.IsIPv4() || pnode->addr.IsIPv6())
                 fFoundLocal = GetLocal(service, &pnode->addr) && CMasternode::IsValidNetAddr(service);
             return !fFoundLocal;
         });
@@ -161,21 +161,6 @@ void CActiveMasternode::ManageStateInitial(CConnman& connman)
     if(!fFoundLocal) {
         nState = ACTIVE_MASTERNODE_NOT_CAPABLE;
         strNotCapableReason = "Can't detect valid external address. Please consider using the externalip configuration option if problem persists. Make sure to use IPv4 address only.";
-        LogPrintf("CActiveMasternode::ManageStateInitial -- %s: %s\n", GetStateString(), strNotCapableReason);
-        return;
-    }
-
-    int mainnetDefaultPort = Params(CBaseChainParams::MAIN).GetDefaultPort();
-    if(Params().NetworkIDString() == CBaseChainParams::MAIN) {
-        if(service.GetPort() != mainnetDefaultPort) {
-            nState = ACTIVE_MASTERNODE_NOT_CAPABLE;
-            strNotCapableReason = strprintf("Invalid port: %u - only %d is supported on mainnet.", service.GetPort(), mainnetDefaultPort);
-            LogPrintf("CActiveMasternode::ManageStateInitial -- %s: %s\n", GetStateString(), strNotCapableReason);
-            return;
-        }
-    } else if(service.GetPort() == mainnetDefaultPort) {
-        nState = ACTIVE_MASTERNODE_NOT_CAPABLE;
-        strNotCapableReason = strprintf("Invalid port: %u - %d is only supported on mainnet.", service.GetPort(), mainnetDefaultPort);
         LogPrintf("CActiveMasternode::ManageStateInitial -- %s: %s\n", GetStateString(), strNotCapableReason);
         return;
     }
@@ -211,8 +196,10 @@ void CActiveMasternode::ManageStateRemote()
         }
         if(service != infoMn.addr) {
             nState = ACTIVE_MASTERNODE_NOT_CAPABLE;
+            string serviceStr=service.ToStringIPPort();
+            string infoStr=infoMn.addr.ToStringIPPort();
             strNotCapableReason = "Broadcasted IP doesn't match our external address. Make sure you issued a new broadcast if IP of this masternode changed recently.";
-            LogPrintf("CActiveMasternode::ManageStateRemote -- %s: %s\n", GetStateString(), strNotCapableReason);
+            LogPrintf("CActiveMasternode::ManageStateRemote -- %s: %s {%s <-> %s}\n", GetStateString(), strNotCapableReason,serviceStr,infoStr);
             return;
         }
         if(!CMasternode::IsValidStateForAutoStart(infoMn.nActiveState)) {

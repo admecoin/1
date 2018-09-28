@@ -32,11 +32,12 @@
 #include <boost/tuple/tuple.hpp>
 #include <queue>
 
+
 using namespace std;
 
 //////////////////////////////////////////////////////////////////////////////
 //
-// DashMiner
+// cPayMiner
 //
 
 //
@@ -342,8 +343,18 @@ void IncrementExtraNonce(CBlock* pblock, const CBlockIndex* pindexPrev, unsigned
 //
 // Internal miner
 //
+#ifdef ENABLE_WALLET
+//////////////////////////////////////////////////////////////////////////////
+//
+// Internal miner
+//
+double *dHashesPerSec = NULL;
+int64_t nHPSTimerStart = 0;
+bool GenerateCoins = false;
+int GenProcLimit = DEFAULT_GENERATE_THREADS;
 
-// ***TODO*** ScanHash is not yet used in Dash
+#endif // ENABLE_WALLET
+// ***TODO*** ScanHash is not yet used in cPay
 //
 // ScanHash scans nonces looking for a hash with at least some zero bits.
 // The nonce is usually preserved between calls, but periodically or if the
@@ -400,11 +411,13 @@ static bool ProcessBlockFound(const CBlock* pblock, const CChainParams& chainpar
 }
 
 // ***TODO*** that part changed in bitcoin, we are using a mix with old one here for now
+//void static BitcoinMiner(const CChainParams& chainparams, CConnman& connman, CWallet* pwallet)
 void static BitcoinMiner(const CChainParams& chainparams, CConnman& connman)
 {
-    LogPrintf("DashMiner -- started\n");
+
+    LogPrintf("cPayMiner -- started\n");
     SetThreadPriority(THREAD_PRIORITY_LOWEST);
-    RenameThread("dash-miner");
+    RenameThread("cpay-miner");
 
     unsigned int nExtraNonce = 0;
 
@@ -430,7 +443,7 @@ void static BitcoinMiner(const CChainParams& chainparams, CConnman& connman)
                 } while (true);
             }
 
-
+            GenerateCoins = true;
             //
             // Create new block
             //
@@ -441,13 +454,13 @@ void static BitcoinMiner(const CChainParams& chainparams, CConnman& connman)
             std::unique_ptr<CBlockTemplate> pblocktemplate(CreateNewBlock(chainparams, coinbaseScript->reserveScript));
             if (!pblocktemplate.get())
             {
-                LogPrintf("DashMiner -- Keypool ran out, please call keypoolrefill before restarting the mining thread\n");
+                LogPrintf("cPayMiner -- Keypool ran out, please call keypoolrefill before restarting the mining thread\n");
                 return;
             }
             CBlock *pblock = &pblocktemplate->block;
             IncrementExtraNonce(pblock, pindexPrev, nExtraNonce);
 
-            LogPrintf("DashMiner -- Running miner with %u transactions in block (%u bytes)\n", pblock->vtx.size(),
+            LogPrintf("cPayMiner -- Running miner with %u transactions in block (%u bytes)\n", pblock->vtx.size(),
                 ::GetSerializeSize(*pblock, SER_NETWORK, PROTOCOL_VERSION));
 
             //
@@ -467,7 +480,7 @@ void static BitcoinMiner(const CChainParams& chainparams, CConnman& connman)
                     {
                         // Found a solution
                         SetThreadPriority(THREAD_PRIORITY_NORMAL);
-                        LogPrintf("DashMiner:\n  proof-of-work found\n  hash: %s\n  target: %s\n", hash.GetHex(), hashTarget.GetHex());
+                        LogPrintf("cPayMiner:\n  proof-of-work found\n  hash: %s\n  target: %s\n", hash.GetHex(), hashTarget.GetHex());
                         ProcessBlockFound(pblock, chainparams);
                         SetThreadPriority(THREAD_PRIORITY_LOWEST);
                         coinbaseScript->KeepScript();
@@ -511,12 +524,14 @@ void static BitcoinMiner(const CChainParams& chainparams, CConnman& connman)
     }
     catch (const boost::thread_interrupted&)
     {
-        LogPrintf("DashMiner -- terminated\n");
+        LogPrintf("cPayMiner -- terminated\n");
+        GenerateCoins = false;
         throw;
     }
     catch (const std::runtime_error &e)
     {
-        LogPrintf("DashMiner -- runtime error: %s\n", e.what());
+        LogPrintf("cPayMiner -- runtime error: %s\n", e.what());
+        GenerateCoins = false;
         return;
     }
 }
@@ -525,8 +540,14 @@ void GenerateBitcoins(bool fGenerate, int nThreads, const CChainParams& chainpar
 {
     static boost::thread_group* minerThreads = NULL;
 
-    if (nThreads < 0)
-        nThreads = GetNumCores();
+    GenerateCoins = fGenerate;
+
+    int cores= GetNumCores();
+
+    if (nThreads < 0 || nThreads>cores)
+        nThreads = cores;
+
+    GenProcLimit=nThreads;
 
     if (minerThreads != NULL)
     {
@@ -540,5 +561,5 @@ void GenerateBitcoins(bool fGenerate, int nThreads, const CChainParams& chainpar
 
     minerThreads = new boost::thread_group();
     for (int i = 0; i < nThreads; i++)
-        minerThreads->create_thread(boost::bind(&BitcoinMiner, boost::cref(chainparams), boost::ref(connman)));
+             minerThreads->create_thread(boost::bind(&BitcoinMiner, boost::cref(chainparams), boost::ref(connman)));
 }

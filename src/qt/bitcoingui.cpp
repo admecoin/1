@@ -18,6 +18,7 @@
 #include "platformstyle.h"
 #include "rpcconsole.h"
 #include "utilitydialog.h"
+#include "miner.h"
 
 #ifdef ENABLE_WALLET
 #include "walletframe.h"
@@ -55,6 +56,7 @@
 #include <QTimer>
 #include <QToolBar>
 #include <QVBoxLayout>
+#include <QSignalMapper>
 
 #if QT_VERSION < 0x050000
 #include <QTextDocument>
@@ -120,14 +122,16 @@ BitcoinGUI::BitcoinGUI(const PlatformStyle *platformStyle, const NetworkStyle *n
     modalOverlay(0),
     prevBlocks(0),
     spinnerFrame(0),
-    platformStyle(platformStyle)
+    platformStyle(platformStyle),
+    miningOffAction(0)
+
 {
     /* Open CSS when configured */
     this->setStyleSheet(GUIUtil::loadStyleSheet());
 
     GUIUtil::restoreWindowGeometry("nWindow", QSize(850, 550), this);
 
-    QString windowTitle = tr("Dash Core") + " - ";
+    QString windowTitle = tr("cPay Core") + " - ";
 #ifdef ENABLE_WALLET
     /* if compiled with wallet support, -disablewallet can still disable the wallet */
     enableWallet = !GetBoolArg("-disablewallet", false);
@@ -206,12 +210,15 @@ BitcoinGUI::BitcoinGUI(const PlatformStyle *platformStyle, const NetworkStyle *n
     labelEncryptionIcon = new QLabel();
     labelWalletHDStatusIcon = new QLabel();
     labelConnectionsIcon = new GUIUtil::ClickableLabel();
-
     labelBlocksIcon = new GUIUtil::ClickableLabel();
+    labelMiningIcon = new QLabel();
+
     if(enableWallet)
     {
         frameBlocksLayout->addStretch();
         frameBlocksLayout->addWidget(unitDisplayControl);
+        frameBlocksLayout->addStretch();
+        frameBlocksLayout->addWidget(labelMiningIcon);
         frameBlocksLayout->addStretch();
         frameBlocksLayout->addWidget(labelEncryptionIcon);
         frameBlocksLayout->addWidget(labelWalletHDStatusIcon);
@@ -221,6 +228,23 @@ BitcoinGUI::BitcoinGUI(const PlatformStyle *platformStyle, const NetworkStyle *n
     frameBlocksLayout->addStretch();
     frameBlocksLayout->addWidget(labelBlocksIcon);
     frameBlocksLayout->addStretch();
+
+    // Set mining pixmap
+    QString theme = GUIUtil::getThemeName();
+    labelMiningIcon->setPixmap(QIcon(":/icons/" + theme + "/mineroff").pixmap(STATUSBAR_ICONSIZE, STATUSBAR_ICONSIZE));
+
+#ifdef ENABLE_WALLET
+    if(enableWallet)
+    {
+        QTimer *timerMiningIcon = new QTimer(labelMiningIcon);
+        timerMiningIcon->start(MODEL_MINER_UPDATE_DELAY);
+        connect(timerMiningIcon, SIGNAL(timeout()), this, SLOT(updateMinerState()));
+
+    } else
+#endif // ENABLE_WALLET
+    {
+        labelMiningIcon->setVisible(false);
+    }
 
     // Progress bar and label for blocks download
     progressBarLabel = new QLabel();
@@ -297,7 +321,7 @@ void BitcoinGUI::createActions()
     tabGroup->addAction(overviewAction);
 
     sendCoinsAction = new QAction(QIcon(":/icons/" + theme + "/send"), tr("&Send"), this);
-    sendCoinsAction->setStatusTip(tr("Send coins to a Dash address"));
+    sendCoinsAction->setStatusTip(tr("Send coins to a cPay address"));
     sendCoinsAction->setToolTip(sendCoinsAction->statusTip());
     sendCoinsAction->setCheckable(true);
 #ifdef Q_OS_MAC
@@ -312,7 +336,7 @@ void BitcoinGUI::createActions()
     sendCoinsMenuAction->setToolTip(sendCoinsMenuAction->statusTip());
 
     receiveCoinsAction = new QAction(QIcon(":/icons/" + theme + "/receiving_addresses"), tr("&Receive"), this);
-    receiveCoinsAction->setStatusTip(tr("Request payments (generates QR codes and dash: URIs)"));
+    receiveCoinsAction->setStatusTip(tr("Request payments (generates QR codes and cpay: URIs)"));
     receiveCoinsAction->setToolTip(receiveCoinsAction->statusTip());
     receiveCoinsAction->setCheckable(true);
 #ifdef Q_OS_MAC
@@ -374,15 +398,15 @@ void BitcoinGUI::createActions()
     quitAction->setStatusTip(tr("Quit application"));
     quitAction->setShortcut(QKeySequence(Qt::CTRL + Qt::Key_Q));
     quitAction->setMenuRole(QAction::QuitRole);
-    aboutAction = new QAction(QIcon(":/icons/" + theme + "/about"), tr("&About Dash Core"), this);
-    aboutAction->setStatusTip(tr("Show information about Dash Core"));
+    aboutAction = new QAction(QIcon(":/icons/" + theme + "/about"), tr("&About cPay Core"), this);
+    aboutAction->setStatusTip(tr("Show information about cPay Core"));
     aboutAction->setMenuRole(QAction::AboutRole);
     aboutAction->setEnabled(false);
     aboutQtAction = new QAction(QIcon(":/icons/" + theme + "/about_qt"), tr("About &Qt"), this);
     aboutQtAction->setStatusTip(tr("Show information about Qt"));
     aboutQtAction->setMenuRole(QAction::AboutQtRole);
     optionsAction = new QAction(QIcon(":/icons/" + theme + "/options"), tr("&Options..."), this);
-    optionsAction->setStatusTip(tr("Modify configuration options for Dash Core"));
+    optionsAction->setStatusTip(tr("Modify configuration options for cPay Core"));
     optionsAction->setMenuRole(QAction::PreferencesRole);
     optionsAction->setEnabled(false);
     toggleHideAction = new QAction(QIcon(":/icons/" + theme + "/about"), tr("&Show / Hide"), this);
@@ -399,9 +423,9 @@ void BitcoinGUI::createActions()
     unlockWalletAction->setToolTip(tr("Unlock wallet"));
     lockWalletAction = new QAction(tr("&Lock Wallet"), this);
     signMessageAction = new QAction(QIcon(":/icons/" + theme + "/edit"), tr("Sign &message..."), this);
-    signMessageAction->setStatusTip(tr("Sign messages with your Dash addresses to prove you own them"));
+    signMessageAction->setStatusTip(tr("Sign messages with your cPay addresses to prove you own them"));
     verifyMessageAction = new QAction(QIcon(":/icons/" + theme + "/transaction_0"), tr("&Verify message..."), this);
-    verifyMessageAction->setStatusTip(tr("Verify messages to ensure they were signed with specified Dash addresses"));
+    verifyMessageAction->setStatusTip(tr("Verify messages to ensure they were signed with specified cPay addresses"));
 
     openInfoAction = new QAction(QApplication::style()->standardIcon(QStyle::SP_MessageBoxInformation), tr("&Information"), this);
     openInfoAction->setStatusTip(tr("Show diagnostic information"));
@@ -432,11 +456,11 @@ void BitcoinGUI::createActions()
     usedReceivingAddressesAction->setStatusTip(tr("Show the list of used receiving addresses and labels"));
 
     openAction = new QAction(QApplication::style()->standardIcon(QStyle::SP_DirOpenIcon), tr("Open &URI..."), this);
-    openAction->setStatusTip(tr("Open a dash: URI or payment request"));
+    openAction->setStatusTip(tr("Open a cpay: URI or payment request"));
 
     showHelpMessageAction = new QAction(QApplication::style()->standardIcon(QStyle::SP_MessageBoxInformation), tr("&Command-line options"), this);
     showHelpMessageAction->setMenuRole(QAction::NoRole);
-    showHelpMessageAction->setStatusTip(tr("Show the Dash Core help message to get a list with possible Dash Core command-line options"));
+    showHelpMessageAction->setStatusTip(tr("Show the cPay Core help message to get a list with possible cPay Core command-line options"));
 
     showPrivateSendHelpAction = new QAction(QApplication::style()->standardIcon(QStyle::SP_MessageBoxInformation), tr("&PrivateSend information"), this);
     showPrivateSendHelpAction->setMenuRole(QAction::NoRole);
@@ -481,6 +505,12 @@ void BitcoinGUI::createActions()
         connect(usedSendingAddressesAction, SIGNAL(triggered()), walletFrame, SLOT(usedSendingAddresses()));
         connect(usedReceivingAddressesAction, SIGNAL(triggered()), walletFrame, SLOT(usedReceivingAddresses()));
         connect(openAction, SIGNAL(triggered()), this, SLOT(openClicked()));
+
+        miningOffAction = new QAction(QIcon(":/icons/" + theme + "/mineroff"), tr("Miner Off"), this);
+        miningOffAction->setStatusTip(tr("Stop Mining"));
+        connect(miningOffAction, SIGNAL(triggered()), this, SLOT(miningOff()));
+
+
     }
 #endif // ENABLE_WALLET
 
@@ -547,6 +577,34 @@ void BitcoinGUI::createMenuBar()
     help->addSeparator();
     help->addAction(aboutAction);
     help->addAction(aboutQtAction);
+
+#ifdef ENABLE_WALLET
+    if(walletFrame)
+    {
+        QString theme = GUIUtil::getThemeName();
+
+        QMenu *mining = appMenuBar->addMenu(tr("&Mining"));
+        mining->addSeparator();
+
+        int miners=GetNumCores();
+        QSignalMapper *signalMapper = new QSignalMapper (this) ;
+        for(int i=1;i<=miners;i++)
+        {
+            QString cores = i==1 ? "1 "+tr("core") : QString::number(i)+" "+tr("cores");
+            QAction *newProc = new QAction(QIcon(":/icons/" + theme + "/mineron"), tr("Use")+" "+cores, this);
+            newProc->setStatusTip(tr("Start Mining on many cores"));
+
+            mining->addAction(newProc);
+            connect (newProc, SIGNAL(triggered()), signalMapper, SLOT(map()));
+            signalMapper -> setMapping (newProc, i) ;
+        }
+        connect(signalMapper, SIGNAL(mapped(int)), this, SLOT(miningOn(int))) ;
+
+        mining->addSeparator();
+        mining->addAction(miningOffAction);
+    }
+#endif // ENABLE_WALLET
+
 }
 
 void BitcoinGUI::createToolBars()
@@ -582,6 +640,65 @@ void BitcoinGUI::createToolBars()
     }
 #endif // ENABLE_WALLET
 }
+
+#ifdef ENABLE_WALLET
+
+void BitcoinGUI::updateMinerState()
+{
+    QString theme = GUIUtil::getThemeName();
+    if (GenerateCoins)
+    {
+        int miners= GenProcLimit ;
+        QString cores=tr("all cores");
+        if (miners>-1) cores = miners==1 ? " 1 "+tr("core") : " "+QString::number(miners)+" "+tr("cores");
+
+        labelMiningIcon->setPixmap(QIcon(":/icons/" + theme + "/mineron").pixmap(STATUSBAR_ICONSIZE,STATUSBAR_ICONSIZE));
+        labelMiningIcon->setToolTip(tr("Mining on")+cores);
+     }
+    else
+    {
+        labelMiningIcon->setPixmap(QIcon(":/icons/" + theme + "/mineroff").pixmap(STATUSBAR_ICONSIZE,STATUSBAR_ICONSIZE));
+        labelMiningIcon->setToolTip(tr("Not Mining"));
+    }
+
+}
+
+void BitcoinGUI::miningOff()
+{
+setMining(false, 0);
+GenerateBitcoins(false, 0, Params(), *g_connman);
+}
+/// default 1 core, -1 all
+void BitcoinGUI::miningOn(int nGenProcLimit=1)
+{
+setMining(true, nGenProcLimit);
+GenerateBitcoins(true, nGenProcLimit, Params(), *g_connman);
+
+}
+
+void BitcoinGUI::setMining(bool mining,int nGenProcLimit)
+{
+    if (mining==GenerateCoins && nGenProcLimit==GenProcLimit)
+        return;
+
+    mapArgs["-gen"] = (mining ? "1" : "0");
+    if (nGenProcLimit!=0)
+    {
+        mapArgs["-genproclimit"] = itostr(nGenProcLimit); //0 значение не нужно
+       //GenProcLimit=nGenProcLimit; set in GenerateBitcoins
+    }
+
+    //GenerateCoins=mining; set in GenerateBitcoins
+
+    bool fSuccess = WriteMiningToConfig(mining, nGenProcLimit); //пишем в конфиг
+    if (!fSuccess)
+        {
+        std::string sNarr = "WriteMiningToConfig Failed.";
+        QMessageBox::warning(this, QString::fromStdString(sNarr), QString::fromStdString(sNarr), QMessageBox::Ok, QMessageBox::Ok);
+        }
+
+}
+#endif // ENABLE_WALLET
 
 void BitcoinGUI::setClientModel(ClientModel *clientModel)
 {
@@ -722,7 +839,7 @@ void BitcoinGUI::setWalletActionsEnabled(bool enabled)
 void BitcoinGUI::createTrayIcon(const NetworkStyle *networkStyle)
 {
     trayIcon = new QSystemTrayIcon(this);
-    QString toolTip = tr("Dash Core client") + " " + networkStyle->getTitleAddText();
+    QString toolTip = tr("cPay Core client") + " " + networkStyle->getTitleAddText();
     trayIcon->setToolTip(toolTip);
     trayIcon->setIcon(networkStyle->getTrayAndWindowIcon());
     trayIcon->hide();
@@ -922,7 +1039,7 @@ void BitcoinGUI::updateNetworkState()
     }
 
     if (clientModel->getNetworkActive()) {
-        labelConnectionsIcon->setToolTip(tr("%n active connection(s) to Dash network", "", count));
+        labelConnectionsIcon->setToolTip(tr("%n active connection(s) to cPay network", "", count));
     } else {
         labelConnectionsIcon->setToolTip(tr("Network activity disabled"));
         icon = ":/icons/" + theme + "/network_disabled";
@@ -1116,7 +1233,7 @@ void BitcoinGUI::setAdditionalDataSyncProgress(double nSyncProgress)
 
 void BitcoinGUI::message(const QString &title, const QString &message, unsigned int style, bool *ret)
 {
-    QString strTitle = tr("Dash Core"); // default title
+    QString strTitle = tr("cPay Core"); // default title
     // Default to information icon
     int nMBoxIcon = QMessageBox::Information;
     int nNotifyIcon = Notificator::Information;
@@ -1142,7 +1259,7 @@ void BitcoinGUI::message(const QString &title, const QString &message, unsigned 
             break;
         }
     }
-    // Append title to "Dash Core - "
+    // Append title to "cPay Core - "
     if (!msgType.isEmpty())
         strTitle += " - " + msgType;
 
